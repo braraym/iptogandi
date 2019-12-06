@@ -1,49 +1,45 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 
 import configparser
 import netifaces
-import xmlrpc.client
+import requests
+import json
 
 try:
 	config = configparser.ConfigParser()
-	config.read('/etc/iptogandi.conf')
-
-	api = xmlrpc.client.ServerProxy('https://rpc.gandi.net/xmlrpc/')
+	config.read('/usr/local/etc/iptogandi.conf')
 
 except Exception as e:
 	print(e)
 	exit(1)
+
+errorCount = 0
 
 for section in config.sections():
 	try:
 		apikey = config.get(section, 'apikey')
 		interface = config.get(section, 'interface')
 		domain = config.get(section, 'domain')
-		record = {'type': config.get(section, 'record_type'), 'name': config.get(section, 'record_name')}
-		record_ttl = config.getint(section, 'record_ttl')
+		record = {'type': config.get(section, 'record_type'), 'name': config.get(section, 'record_name'), 'ttl': config.getint(section, 'record_ttl')}
 
-		print('Section: ' + section)		
-		
-		zone_id = api.domain.info(apikey, domain)['zone_id']
+		print('Section: ' + section)
+		ip = netifaces.ifaddresses(interface)[netifaces.AF_INET][0]['addr']
 
-		previous_ip = api.domain.zone.record.list(apikey, zone_id, 0, record)[0]['value']
-		new_ip = netifaces.ifaddresses(interface)[netifaces.AF_INET][0]['addr']
+		print('Updating the record to ' + ip)
 
-		print('Record\'s IP: ' + previous_ip)
-		print('Current IP: ' + new_ip)
+		url = 'https://dns.api.gandi.net/api/v5/domains/' + domain + '/records/' + record['name'] + '/' + record['type']
+		headers = {'Content-Type': 'application/json', 'X-Api-Key': apikey}
+		data = {'rrset_ttl': record['ttl'], 'rrset_values': [ ip ]}
 
-		if(previous_ip != new_ip):
-			print('Updating the record...')
-			new_zone_version = api.domain.zone.version.new(apikey, zone_id)
-			new_record_id = api.domain.zone.record.list(apikey, zone_id, new_zone_version, record)[0]['id']
-			new_record = {'name': record['name'], 'type': record['type'], 'value': new_ip, 'ttl': record_ttl}
-			api.domain.zone.record.update(apikey, zone_id, new_zone_version, {'id':new_record_id}, new_record)
-			print(api.domain.zone.version.set(apikey, zone_id, new_zone_version))
+		response = requests.put(url, headers=headers, data=json.dumps(data))
+		result = json.loads(response._content)
+		print(result)
 
-		print()
+		if response.status_code != 201:
+			errorCount += 1
 
 	except Exception as e:
 		print(e)
 		exit(1)
 
-exit(0)
+exit(errorCount)
